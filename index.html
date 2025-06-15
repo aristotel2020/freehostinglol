@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infinite Number Path</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none; /* Prevents scrolling on touch devices during gameplay */
+        }
+        .grid-container-wrapper {
+             /* A container to constrain the grid's max width but allow it to shrink */
+            width: 100%;
+            max-width: 450px; /* Max size for large screens */
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .grid-cell {
+            border: 1px solid #d1d5db; /* gray-300 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease-in-out;
+            aspect-ratio: 1 / 1; /* This is the key for responsive squares */
+        }
+        .grid-cell.start {
+            background-color: #34d399; /* emerald-400 */
+            color: white;
+            border-color: #10b981; /* emerald-600 */
+        }
+        .grid-cell.end {
+            background-color: #fbbf24; /* amber-400 */
+            color: white;
+            border-color: #f59e0b; /* amber-600 */
+        }
+        .grid-cell.path {
+            background-color: #60a5fa; /* blue-400 */
+            color: white;
+        }
+        .grid-cell.selected {
+            background-color: #a78bfa; /* violet-400 */
+            color: white;
+            transform: scale(1.1);
+            z-index: 10;
+        }
+        .grid-cell.invalid {
+            background-color: #f87171; /* red-400 */
+            animation: shake 0.5s;
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        .mode-button {
+            background-color: #f3f4f6; /* gray-100 */
+            color: #4b5563; /* gray-600 */
+            transition: all 0.2s ease;
+        }
+        .mode-button.active {
+            background-color: #4f46e5; /* indigo-600 */
+            color: white;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-md mx-auto bg-white rounded-xl shadow-lg p-6 text-center">
+        <h1 class="text-3xl font-bold text-gray-800">Infinite Number Path</h1>
+        <p class="text-gray-500 mt-2">Connect the green and yellow cells. The next number must be +/- 1 from the previous.</p>
+        
+        <div id="mode-selector" class="flex justify-center gap-2 my-5">
+            <button data-size="5" class="mode-button active px-4 py-2 text-sm font-semibold rounded-lg focus:outline-none">5x5</button>
+            <button data-size="7" class="mode-button px-4 py-2 text-sm font-semibold rounded-lg focus:outline-none">7x7</button>
+            <button data-size="10" class="mode-button px-4 py-2 text-sm font-semibold rounded-lg focus:outline-none">10x10</button>
+        </div>
+
+        <div class="my-4">
+            <p class="text-lg text-gray-600">Score</p>
+            <p id="score" class="text-5xl font-bold text-indigo-600">0</p>
+        </div>
+
+        <div id="grid-container" class="grid-container-wrapper">
+            <!-- Game grid will be generated here -->
+        </div>
+
+        <div id="message-area" class="mt-4 h-8 text-lg font-medium"></div>
+
+        <button id="reset-button" class="mt-4 px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-75">
+            New Puzzle & Reset Score
+        </button>
+    </div>
+
+    <script>
+        const gridContainer = document.getElementById('grid-container');
+        const scoreEl = document.getElementById('score');
+        const messageArea = document.getElementById('message-area');
+        const resetButton = document.getElementById('reset-button');
+        const modeSelector = document.getElementById('mode-selector');
+
+        let GRID_SIZE = 5;
+        let score = 0;
+        let grid = [];
+        let path = [];
+        let startPoint = null;
+        let endPoint = null;
+        let targetPoint = null;
+        let currentPath = [];
+        let isDrawing = false;
+
+        /**
+         * Sets the grid size and starts a new game without resetting score.
+         * @param {number} size - The new grid size (5, 7, or 10).
+         */
+        function setGridSize(size) {
+            GRID_SIZE = size;
+            document.querySelectorAll('.mode-button').forEach(btn => {
+                btn.classList.remove('active');
+                if (parseInt(btn.dataset.size) === size) {
+                    btn.classList.add('active');
+                }
+            });
+            newGame();
+        }
+
+        /**
+         * Initializes and starts a new game.
+         */
+        function newGame() {
+            grid = [];
+            path = [];
+            currentPath = [];
+            isDrawing = false;
+            targetPoint = null;
+            generateGrid();
+            renderGrid();
+            messageArea.textContent = '';
+        }
+
+        /**
+         * Generates the grid with a valid, single-stroke path.
+         */
+        function generateGrid() {
+            grid = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(null));
+            let pathLength = Math.floor(GRID_SIZE * GRID_SIZE * (0.5 + Math.random() * 0.2)); 
+            if (pathLength < GRID_SIZE) pathLength = GRID_SIZE;
+            
+            let attempts = 0;
+            path = [];
+            while (path.length < pathLength && attempts < 1000) {
+                path = []; 
+                let visited = new Set();
+                let startX = Math.floor(Math.random() * GRID_SIZE);
+                let startY = Math.floor(Math.random() * GRID_SIZE);
+                let currentValue = Math.floor(Math.random() * 10) + 1; 
+
+                let currentPos = { x: startX, y: startY };
+                path.push({ ...currentPos, value: currentValue });
+                visited.add(`${currentPos.x},${currentPos.y}`);
+
+                for (let i = 0; i < pathLength - 1; i++) {
+                    let neighbors = getUnvisitedNeighbors(currentPos, visited);
+                    if (neighbors.length === 0) break;
+
+                    let nextPos = neighbors[Math.floor(Math.random() * neighbors.length)];
+                    let valueChange = Math.random() > 0.5 ? 1 : -1;
+                    currentValue += valueChange;
+                    if (currentValue < 1) currentValue = 2; 
+
+                    currentPos = nextPos;
+                    path.push({ ...currentPos, value: currentValue });
+                    visited.add(`${currentPos.x},${currentPos.y}`);
+                }
+                attempts++;
+            }
+            
+            if (path.length < 2) {
+                newGame(); return;
+            }
+
+            path.forEach(p => { grid[p.y][p.x] = p.value; });
+            startPoint = path[0];
+            endPoint = path[path.length - 1];
+
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    if (grid[y][x] === null) {
+                        let isDistractor = true;
+                        let randomValue;
+                        while(isDistractor) {
+                             randomValue = Math.floor(Math.random() * 20) + 1;
+                             const neighbors = [{x:x-1, y}, {x:x+1, y}, {x, y:y-1}, {x, y:y+1}];
+                             let connects = false;
+                             for(const n of neighbors) {
+                                 if(n.x >=0 && n.x < GRID_SIZE && n.y >= 0 && n.y < GRID_SIZE && grid[n.y][n.x] !== null) {
+                                     if(Math.abs(grid[n.y][n.x] - randomValue) === 1) {
+                                         connects = true;
+                                         break;
+                                     }
+                                 }
+                             }
+                             if(!connects) { isDistractor = false; }
+                        }
+                        grid[y][x] = randomValue;
+                    }
+                }
+            }
+        }
+        
+        function getUnvisitedNeighbors(pos, visited) {
+            const neighbors = [];
+            const directions = [{ x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }];
+            for (const dir of directions) {
+                const newX = pos.x + dir.x;
+                const newY = pos.y + dir.y;
+                if (newX >= 0 && newX < GRID_SIZE && newY >= 0 && newY < GRID_SIZE && !visited.has(`${newX},${newY}`)) {
+                    neighbors.push({ x: newX, y: newY });
+                }
+            }
+            return neighbors;
+        }
+
+        function renderGrid() {
+            gridContainer.innerHTML = '';
+            const gridEl = document.createElement('div');
+            const gap = GRID_SIZE === 10 ? 'gap-px' : 'gap-1';
+            gridEl.className = `grid ${gap} p-1 bg-gray-200 rounded-lg w-full`;
+            gridEl.style.gridTemplateColumns = `repeat(${GRID_SIZE}, 1fr)`;
+
+            let fontSize;
+            if (GRID_SIZE === 5) { fontSize = 'clamp(1rem, 4vw, 1.5rem)'; } 
+            else if (GRID_SIZE === 7) { fontSize = 'clamp(0.8rem, 3vw, 1.2rem)'; } 
+            else { fontSize = 'clamp(0.6rem, 2.5vw, 1rem)'; }
+
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = document.createElement('div');
+                    cell.dataset.x = x; cell.dataset.y = y; cell.dataset.value = grid[y][x];
+                    cell.classList.add('grid-cell', 'rounded-sm');
+                    cell.textContent = grid[y][x];
+                    cell.style.fontSize = fontSize;
+
+                    if (x === startPoint.x && y === startPoint.y) cell.classList.add('start');
+                    if (x === endPoint.x && y === endPoint.y) cell.classList.add('end');
+
+                    cell.addEventListener('mousedown', handleInteractionStart);
+                    cell.addEventListener('touchstart', handleInteractionStart);
+                    cell.addEventListener('mouseenter', handleInteractionMove);
+                    cell.addEventListener('touchmove', handleInteractionMove);
+
+                    gridEl.appendChild(cell);
+                }
+            }
+            gridContainer.appendChild(gridEl);
+            document.addEventListener('mouseup', handleInteractionEnd, { passive: false });
+            document.addEventListener('touchend', handleInteractionEnd, { passive: false });
+        }
+
+        function handleInteractionStart(e) {
+            e.preventDefault();
+            const cell = getCellFromEvent(e);
+            if (!cell || isDrawing) return;
+            const x = parseInt(cell.dataset.x); const y = parseInt(cell.dataset.y);
+            const isStartNode = (x === startPoint.x && y === startPoint.y);
+            const isEndNode = (x === endPoint.x && y === endPoint.y);
+            if (isStartNode || isEndNode) {
+                isDrawing = true;
+                targetPoint = isStartNode ? endPoint : startPoint;
+                currentPath = [{ x, y, value: grid[y][x] }];
+                cell.classList.add('selected');
+            }
+        }
+        
+        function handleInteractionMove(e) {
+            if (!isDrawing) return;
+            e.preventDefault();
+            const cell = getCellFromEvent(e);
+            if (!cell || currentPath.some(p => p.x === parseInt(cell.dataset.x) && p.y === parseInt(cell.dataset.y))) return;
+            const x = parseInt(cell.dataset.x); const y = parseInt(cell.dataset.y);
+            const lastPoint = currentPath[currentPath.length - 1];
+            const isAdjacent = Math.abs(lastPoint.x - x) + Math.abs(lastPoint.y - y) === 1;
+            const isValueCorrect = Math.abs(lastPoint.value - grid[y][x]) === 1;
+
+            if (isAdjacent && isValueCorrect) {
+                currentPath.push({ x, y, value: grid[y][x] });
+                cell.classList.add('selected');
+                if (x === targetPoint.x && y === targetPoint.y) win();
+            } else if (isAdjacent) {
+                cell.classList.add('invalid');
+                setTimeout(() => cell.classList.remove('invalid'), 500);
+                resetCurrentPath();
+            }
+        }
+        
+        function handleInteractionEnd(e) {
+            if (isDrawing) resetCurrentPath();
+        }
+
+        function resetCurrentPath() {
+            isDrawing = false;
+            targetPoint = null;
+            document.querySelectorAll('.grid-cell.selected').forEach(c => c.classList.remove('selected'));
+            currentPath = [];
+        }
+
+        function win() {
+            isDrawing = false;
+            targetPoint = null;
+            
+            // Score is the number of cells between the start and end points.
+            const pointsAwarded = Math.max(0, currentPath.length - 2);
+            score += pointsAwarded;
+            
+            scoreEl.textContent = score;
+            messageArea.textContent = `Success! +${pointsAwarded} points`;
+            messageArea.style.color = '#10b981';
+
+            currentPath.forEach(p => {
+                const cell = document.querySelector(`[data-x='${p.x}'][data-y='${p.y}']`);
+                if(cell) { cell.classList.remove('selected'); cell.classList.add('path'); }
+            });
+            setTimeout(newGame, 1100); // Slightly longer delay to read the points message
+        }
+        
+        function getCellFromEvent(e) {
+             if (e.touches && e.touches.length > 0) {
+                const touch = e.touches[0];
+                return document.elementFromPoint(touch.clientX, touch.clientY);
+            }
+            return e.target.closest('.grid-cell');
+        }
+
+        // --- Event Listeners ---
+        modeSelector.addEventListener('click', (e) => {
+            if (e.target.matches('.mode-button')) {
+                const newSize = parseInt(e.target.dataset.size);
+                if (newSize !== GRID_SIZE) {
+                    setGridSize(newSize);
+                }
+            }
+        });
+        
+        resetButton.addEventListener('click', () => {
+            score = 0; 
+            scoreEl.textContent = score;
+            newGame();
+        });
+
+        // Initial game start
+        newGame();
+    </script>
+
+</body>
+</html>
