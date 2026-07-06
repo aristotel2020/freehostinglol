@@ -3,49 +3,465 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voxel Mining Ops - Prototype</title>
+    <title>Regolith Resource Gatherer</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        canvas { display: block; }
-        #crosshair {
+        :root {
+            --bg-color: #1e1e24;
+            --panel-bg: #2b2b36;
+            --text-main: #e0e0e0;
+            --accent: #4caf50;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+        }
+
+        /* Game Board */
+        #game-container {
+            position: relative;
+            width: 500px;
+            height: 500px;
+            background-color: #111;
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(10, 1fr);
+            grid-template-rows: repeat(10, 1fr);
+            width: 100%;
+            height: 100%;
+        }
+
+        .cell {
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            background-color: #333; /* Unrevealed */
+            cursor: pointer;
+            transition: background-color 0.2s, opacity 0.5s;
+            box-sizing: border-box;
+        }
+
+        .cell:hover {
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .cell.revealed {
+            background-color: #555;
+        }
+
+        .cell.factory {
+            background-color: #e91e63 !important;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 24px;
+        }
+
+        .cell.empty {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .cell.targeted {
+            border: 2px solid var(--accent);
+        }
+
+        /* Vehicle */
+        #vehicle {
             position: absolute;
-            top: 50%; left: 50%;
-            width: 20px; height: 20px;
-            border: 2px solid white;
-            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            background-color: #ffeb3b;
+            border-radius: 4px;
             transform: translate(-50%, -50%);
             pointer-events: none;
+            box-shadow: 0 0 8px #ffeb3b;
+            transition: width 0.2s, height 0.2s;
+            z-index: 10;
         }
-        #info-panel {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            color: white;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 15px;
+
+        #vehicle.mining {
+            background-color: #ff9800;
+            animation: pulse 0.5s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { transform: translate(-50%, -50%) scale(1); }
+            to { transform: translate(-50%, -50%) scale(1.2); }
+        }
+
+        /* UI Panels */
+        #ui-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            width: 300px;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            padding: 20px;
             border-radius: 8px;
-            border: 1px solid #444;
-            pointer-events: none;
-            display: none;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }
+
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 0.95rem;
+        }
+
+        .resource-color {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-right: 8px;
+            border-radius: 2px;
+        }
+
+        .instructions {
+            font-size: 0.85rem;
+            color: #aaa;
+            line-height: 1.4;
+        }
+
     </style>
 </head>
 <body>
-    <div id="crosshair"></div>
-    <div id="info-panel">
-        <h3 style="margin:0">Block Data</h3>
-        <p id="block-details">Click a block to see minerals.</p>
+
+    <div id="game-container">
+        <div id="grid"></div>
+        <div id="vehicle"></div>
     </div>
 
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    <div id="ui-container">
+        <div class="panel">
+            <h2>Scanner (Selected Block)</h2>
+            <div id="block-info">
+                <div style="color: #aaa; font-style: italic;">Left-click a block to reveal its composition.</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Factory Storage</h2>
+            <div id="inventory-info"></div>
+        </div>
+
+        <div class="panel instructions">
+            <strong>Controls:</strong><br><br>
+            - <strong>Left Click:</strong> Reveal block and scan contents.<br>
+            - <strong>Right Click:</strong> Assign vehicle to mine block.<br><br>
+            The vehicle will extract up to 10 units per trip, returning to the factory (Pink Tile) to deposit. Empty blocks will collapse.
+        </div>
+    </div>
+
+    <script>
+        const GRID_SIZE = 10;
+        const CELL_SIZE = 50; // 500px / 10
+        const RESOURCES = ['Oxygen', 'Silicon', 'Aluminium', 'Calcium', 'Iron', 'Magnesium', 'Titanium', 'Trace'];
+        const COLORS = ['#a0c4ff', '#e5e5e5', '#c8b6ff', '#ffc6ff', '#ffadad', '#caffbf', '#fdffb6', '#ffd6a5'];
+        
+        // Factory is at (4,4)
+        const FACTORY_X = 4;
+        const FACTORY_Y = 4;
+
+        let grid = [];
+        let selectedBlock = null;
+        
+        let inventory = {
+            Oxygen: 0, Silicon: 0, Aluminium: 0, Calcium: 0, 
+            Iron: 0, Magnesium: 0, Titanium: 0, Trace: 0
+        };
+
+        let vehicle = {
+            x: FACTORY_X * CELL_SIZE + CELL_SIZE/2,
+            y: FACTORY_Y * CELL_SIZE + CELL_SIZE/2,
+            target: null,
+            state: 'idle', // idle, outbound, mining, inbound
+            capacity: 10,
+            speed: 3,
+            mineTimer: 0,
+            maxMineTime: 120, // frames
+            payload: {}
+        };
+
+        const gridEl = document.getElementById('grid');
+        const vehicleEl = document.getElementById('vehicle');
+        const blockInfoEl = document.getElementById('block-info');
+        const inventoryInfoEl = document.getElementById('inventory-info');
+
+        // --- 1. Generate World Map with Smooth Noise ---
+        function initMap() {
+            // Step A: Random base proportions
+            for (let y = 0; y < GRID_SIZE; y++) {
+                grid[y] = [];
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    grid[y][x] = {
+                        x, y,
+                        isFactory: (x === FACTORY_X && y === FACTORY_Y),
+                        revealed: false,
+                        empty: false,
+                        quantity: Math.floor(Math.random() * 300) + 100, // 100 to 400 total
+                        composition: RESOURCES.map(() => Math.random()),
+                        element: null
+                    };
+                }
+            }
+
+            // Step B: Cellular automata smoothing to correlate neighbors
+            for (let pass = 0; pass < 2; pass++) {
+                let nextGrid = JSON.parse(JSON.stringify(grid));
+                for (let y = 0; y < GRID_SIZE; y++) {
+                    for (let x = 0; x < GRID_SIZE; x++) {
+                        for (let r = 0; r < RESOURCES.length; r++) {
+                            let sum = 0, count = 0;
+                            // Check 3x3 neighborhood
+                            for (let dy = -1; dy <= 1; dy++) {
+                                for (let dx = -1; dx <= 1; dx++) {
+                                    if (y+dy >= 0 && y+dy < GRID_SIZE && x+dx >= 0 && x+dx < GRID_SIZE) {
+                                        sum += grid[y+dy][x+dx].composition[r];
+                                        count++;
+                                    }
+                                }
+                            }
+                            nextGrid[y][x].composition[r] = sum / count;
+                        }
+                    }
+                }
+                grid = nextGrid; // Note: DOM elements and object references are broken by JSON trick, so we re-link later
+            }
+
+            // Step C: Normalize proportions (make them sum to 1.0) and build DOM
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    let cell = grid[y][x];
+                    
+                    // Restore properties lost in JSON stringify
+                    cell.isFactory = (x === FACTORY_X && y === FACTORY_Y);
+                    
+                    let sum = cell.composition.reduce((a, b) => a + b, 0);
+                    cell.composition = cell.composition.map(val => val / sum);
+
+                    // Create HTML Element
+                    let el = document.createElement('div');
+                    el.className = 'cell' + (cell.isFactory ? ' factory' : '');
+                    if (cell.isFactory) el.innerText = 'F';
+                    
+                    // Interactions
+                    el.addEventListener('click', () => revealBlock(cell));
+                    el.addEventListener('contextmenu', (e) => {
+                        e.preventDefault(); // Prevent browser right-click menu
+                        assignVehicle(cell);
+                    });
+
+                    cell.element = el;
+                    gridEl.appendChild(el);
+                }
+            }
+            updateInventoryUI();
+        }
+
+        // --- 2. Interaction Logic ---
+        function revealBlock(cell) {
+            if (cell.isFactory || cell.empty) return;
+            cell.revealed = true;
+            
+            // Find highest concentration to tint the block
+            let maxIndex = cell.composition.indexOf(Math.max(...cell.composition));
+            cell.element.classList.add('revealed');
+            cell.element.style.backgroundColor = COLORS[maxIndex]; // Tint to dominant resource
+            
+            selectedBlock = cell;
+            updateBlockUI();
+        }
+
+        function assignVehicle(cell) {
+            if (!cell.revealed || cell.isFactory || cell.empty) return;
+            
+            // Clear old target visuals
+            if (vehicle.target && vehicle.target.element) {
+                vehicle.target.element.classList.remove('targeted');
+            }
+
+            vehicle.target = cell;
+            cell.element.classList.add('targeted');
+            
+            // Interrupt whatever the vehicle is doing and head to new target immediately
+            vehicle.state = 'outbound';
+            vehicleEl.classList.remove('mining');
+            
+            selectedBlock = cell;
+            updateBlockUI();
+        }
+
+        // --- 3. Game Loop (Movement & Mining) ---
+        function gameLoop() {
+            updateVehicle();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updateVehicle() {
+            if (vehicle.state === 'idle') return;
+
+            let destX, destY;
+
+            if (vehicle.state === 'outbound') {
+                if (!vehicle.target || vehicle.target.empty) {
+                    vehicle.state = 'inbound'; // Target disappeared or invalid, go home
+                    return;
+                }
+                destX = vehicle.target.x * CELL_SIZE + CELL_SIZE/2;
+                destY = vehicle.target.y * CELL_SIZE + CELL_SIZE/2;
+
+            } else if (vehicle.state === 'inbound') {
+                destX = FACTORY_X * CELL_SIZE + CELL_SIZE/2;
+                destY = FACTORY_Y * CELL_SIZE + CELL_SIZE/2;
+            }
+
+            if (vehicle.state === 'outbound' || vehicle.state === 'inbound') {
+                let dx = destX - vehicle.x;
+                let dy = destY - vehicle.y;
+                let dist = Math.hypot(dx, dy);
+
+                if (dist <= vehicle.speed) {
+                    // Reached destination
+                    vehicle.x = destX;
+                    vehicle.y = destY;
+
+                    if (vehicle.state === 'outbound') {
+                        vehicle.state = 'mining';
+                        vehicle.mineTimer = vehicle.maxMineTime;
+                        vehicleEl.classList.add('mining');
+                    } else if (vehicle.state === 'inbound') {
+                        depositPayload();
+                        if (vehicle.target && !vehicle.target.empty) {
+                            vehicle.state = 'outbound'; // Go back for more
+                        } else {
+                            if(vehicle.target) vehicle.target.element.classList.remove('targeted');
+                            vehicle.target = null;
+                            vehicle.state = 'idle';
+                        }
+                    }
+                } else {
+                    // Move
+                    vehicle.x += (dx / dist) * vehicle.speed;
+                    vehicle.y += (dy / dist) * vehicle.speed;
+                }
+            } else if (vehicle.state === 'mining') {
+                vehicle.mineTimer--;
+                if (vehicle.mineTimer <= 0) {
+                    extractResources();
+                    vehicle.state = 'inbound';
+                    vehicleEl.classList.remove('mining');
+                }
+            }
+
+            // Render vehicle position
+            vehicleEl.style.left = vehicle.x + 'px';
+            vehicleEl.style.top = vehicle.y + 'px';
+        }
+
+        function extractResources() {
+            let cell = vehicle.target;
+            let extractAmount = Math.min(cell.quantity, vehicle.capacity);
+            
+            cell.quantity -= extractAmount;
+            
+            vehicle.payload = {};
+            for (let i = 0; i < RESOURCES.length; i++) {
+                // Determine exact amounts based on proportion
+                vehicle.payload[RESOURCES[i]] = extractAmount * cell.composition[i];
+            }
+
+            if (cell.quantity <= 0) {
+                cell.empty = true;
+                cell.element.classList.add('empty');
+                cell.element.classList.remove('targeted');
+                if (selectedBlock === cell) updateBlockUI(); // Clear UI if selected
+            } else if (selectedBlock === cell) {
+                updateBlockUI(); // Update quantity in UI
             }
         }
-    </script>
 
-    <script type="module" src="./main.js"></script>
+        function depositPayload() {
+            for (let res of RESOURCES) {
+                if (vehicle.payload[res]) {
+                    inventory[res] += vehicle.payload[res];
+                }
+            }
+            vehicle.payload = {};
+            updateInventoryUI();
+        }
+
+        // --- 4. UI Updates ---
+        function updateBlockUI() {
+            if (!selectedBlock || selectedBlock.isFactory) {
+                blockInfoEl.innerHTML = '<div style="color: #aaa; font-style: italic;">Select a resource block.</div>';
+                return;
+            }
+
+            if (selectedBlock.empty) {
+                blockInfoEl.innerHTML = '<div style="color: #e53935; font-weight: bold;">Block depleted.</div>';
+                return;
+            }
+
+            let html = `
+                <div class="stat-row" style="margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;">
+                    <strong>Total Yield:</strong>
+                    <span>${selectedBlock.quantity.toFixed(0)} units</span>
+                </div>
+            `;
+
+            for (let i = 0; i < RESOURCES.length; i++) {
+                let percentage = (selectedBlock.composition[i] * 100).toFixed(1);
+                html += `
+                    <div class="stat-row">
+                        <span>
+                            <span class="resource-color" style="background-color: ${COLORS[i]}"></span>
+                            ${RESOURCES[i]}
+                        </span>
+                        <span>${percentage}%</span>
+                    </div>
+                `;
+            }
+            blockInfoEl.innerHTML = html;
+        }
+
+        function updateInventoryUI() {
+            let html = '';
+            for (let i = 0; i < RESOURCES.length; i++) {
+                let amount = inventory[RESOURCES[i]].toFixed(1);
+                html += `
+                    <div class="stat-row">
+                        <span>
+                            <span class="resource-color" style="background-color: ${COLORS[i]}"></span>
+                            ${RESOURCES[i]}
+                        </span>
+                        <strong style="font-family: monospace; font-size: 1.1rem;">${amount}</strong>
+                    </div>
+                `;
+            }
+            inventoryInfoEl.innerHTML = html;
+        }
+
+        // Boot up
+        initMap();
+        gameLoop();
+
+    </script>
 </body>
 </html>
